@@ -54,7 +54,7 @@ def detect_feature_modalities(
         values.
     """
     features: list[Feature] = []
-    big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
+    big_enough_n_to_infer_cat = len(X) > min_samples_for_inference # v3 样本量大于等于100才推断类别特征
     for i, index in enumerate(range(X.shape[1])):
         X_slice: np.ndarray = X[:, index]
         reported_categorical = index in (provided_categorical_indices or ())
@@ -62,10 +62,10 @@ def detect_feature_modalities(
         feat_modality = _detect_feature_modality(
             s=pd.Series(X_slice, name=feature_name),
             reported_categorical=reported_categorical,
-            max_unique_for_category=max_unique_for_category,
-            min_unique_for_numerical=min_unique_for_numerical,
+            max_unique_for_category=max_unique_for_category, # v3 传自config, 唯一值小于等于30 认为是类别特征
+            min_unique_for_numerical=min_unique_for_numerical, # v3 传自config, 唯一值大于等于4 认为是数值特征
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
-        )
+        ) # 判断特征类型
         features.append(Feature(name=feature_name, modality=feat_modality))
     return FeatureSchema(features=features)
 
@@ -87,7 +87,7 @@ def _detect_feature_modality(
         # (handled below) even when all-missing, so they route through the ordinal
         # encoder consistently between fit and predict instead of being treated as
         # a constant numeric column that crashes on string values seen at predict.
-        return FeatureModality.CONSTANT
+        return FeatureModality.CONSTANT # 唯一值≤1 常量特征
 
     if _is_numeric_pandas_series(s):
         if _detect_numeric_as_categorical(
@@ -103,8 +103,8 @@ def _detect_feature_modality(
         s.dtype, pd.CategoricalDtype
     ):
         if n_unique <= max_unique_for_category:
-            return FeatureModality.CATEGORICAL
-        return FeatureModality.TEXT
+            return FeatureModality.CATEGORICAL # 字符串且小于唯一值上限，类别型
+        return FeatureModality.TEXT # 字符串 但大于唯一值上限，text型
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )
