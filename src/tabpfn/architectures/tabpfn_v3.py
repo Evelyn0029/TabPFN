@@ -1113,11 +1113,11 @@ class ICLTransformerBlock(nn.Module):
         if return_kv:
             # Run attention without chunking so we can capture the KV entry
             attn_out, kv_entry = self.icl_attention(
-                self.layernorm(x_BRE),
+                self.layernorm(x_BRE), # 先经过 layernorm
                 single_eval_pos=single_eval_pos,
                 return_kv=True,
             )
-            x_BRE = x_BRE + attn_out
+            x_BRE = x_BRE + attn_out # 残差，attention后的加上原x，再次经过下一层attention
         elif cached_kv is not None:
             # Use cached KV -- chunking over test batch is fine
             # TODO: Performance test this as it might not be needed.
@@ -1150,7 +1150,7 @@ class ICLTransformerBlock(nn.Module):
                     self.layernorm(x),
                     single_eval_pos=single_eval_pos,
                 )
-                return out
+                return out # x经过 layernorm 
 
             x_BRE = chunked_evaluate_maybe_inplace(
                 _attn_fn,
@@ -1555,7 +1555,7 @@ class TabPFNV3(Architecture):
                 n_hidden=config.softmax_scaling_mlp_hidden_dim,
             ),
             **kw,
-        )
+        ) # 同一列其他行的信息
 
         # ---- Cross-feature interaction (RowInteraction) ----
         self.column_aggregator = ColumnAggregator(
@@ -1568,7 +1568,7 @@ class TabPFNV3(Architecture):
             use_rope=config.use_rope,
             rope_base=config.feat_agg_rope_base,
             **kw,
-        )
+        ) # 同一行其它列的信息
 
         # ---- ICL target encoder ----
         if task_type == "multiclass":
@@ -1595,8 +1595,8 @@ class TabPFNV3(Architecture):
                 ),
                 **kw,
             )
-            for _ in range(config.nlayers)
-        )
+            for _ in range(config.nlayers) # 24层
+        ) 
 
         # ---- Output norm + decoder ----
         self.output_norm = norm_factory(self.icl_emsize)
@@ -1616,7 +1616,7 @@ class TabPFNV3(Architecture):
                 head_dim=config.decoder_head_dim,
                 num_heads=config.decoder_num_heads,
                 softmax_scaling_layer=decoder_softmax_scaling,
-            )
+            ) 
         else:
             self.output_projection = nn.Sequential(
                 nn.Linear(self.icl_emsize, self.icl_emsize * config.ff_factor, **kw),
@@ -1810,9 +1810,9 @@ class TabPFNV3(Architecture):
                 train_emb,
                 test_emb,
                 y_BN[:, :num_train],
-            )
+            ) # 对训练样本的 one-hot targets 做加权平均，取 log 得到 logits
         else:
-            test_out = self.output_projection(test_emb.transpose(0, 1))
+            test_out = self.output_projection(test_emb.transpose(0, 1)) # 回归mlp=linear+gelu+linear
 
         if self._nan_safe_output:
             test_out = torch.nan_to_num(test_out, nan=0.0)
@@ -1890,9 +1890,9 @@ class TabPFNV3(Architecture):
             nan_indicator_RiBC = _generate_nan_and_inf_indicator(x_RiBC)
             nan_ind_BRiC = nan_indicator_RiBC.transpose(0, 1)
 
-        x_RiBC, _ = _impute_nan_and_inf_with_mean(x_RiBC, num_train, scaler_cache)
+        x_RiBC, _ = _impute_nan_and_inf_with_mean(x_RiBC, num_train, scaler_cache) # 用训练行均值填充 NaN/Inf
         if scaler_cache is not None:
-            x_RiBC = self.standard_scaler.transform(x_RiBC, fitted_cache=scaler_cache)
+            x_RiBC = self.standard_scaler.transform(x_RiBC, fitted_cache=scaler_cache) # StandardScaler 标准化 (基于训练行拟合)
         else:
             x_RiBC = self.standard_scaler(x=x_RiBC, num_train_rows=num_train)
         x_BRiC = x_RiBC.transpose(0, 1)
@@ -1906,7 +1906,7 @@ class TabPFNV3(Architecture):
     ) -> torch.Tensor:
         """Build the full grouped + indicator-concatenated tensor."""
         size = self.feature_group_size
-        x_grouped = [torch.roll(x_BRiC, shifts=-(2**i), dims=2) for i in range(size)]
+        x_grouped = [torch.roll(x_BRiC, shifts=-(2**i), dims=2) for i in range(size)] # 对特征轴做 circular roll，生成 3 个偏移视图
         x_grouped = torch.stack(x_grouped, dim=-1)
         if nan_ind_BRiC is not None:
             ind_grouped = [
@@ -2005,13 +2005,13 @@ class TabPFNV3(Architecture):
         the `(B, N_train, E)` y embedding.
         """
         B = rows_RiBC.shape[1]
-        x_BRiC, nan_ind_BRiC = self._preprocess_raw(rows_RiBC, num_train, scaler_cache)
+        x_BRiC, nan_ind_BRiC = self._preprocess_raw(rows_RiBC, num_train, scaler_cache) # 缺失值用均值填充、标准化
         y_col_emb_BNE: torch.Tensor | None = None
         if scaler_cache is None and num_train > 0:
             y_col_BN = self._prepare_y(y, num_train, B)
             y_col_emb_BNE = self._embed_col_y(y_col_BN)
 
-        x_grouped_BRiCG = self._group_features(x_BRiC, nan_ind_BRiC)
+        x_grouped_BRiCG = self._group_features(x_BRiC, nan_ind_BRiC) # 其实是做了一些新的特征拼接原数据上
         return x_grouped_BRiCG, y_col_emb_BNE
 
     def _stages_0_to_2(
@@ -2061,7 +2061,7 @@ class TabPFNV3(Architecture):
         )
         x_grouped_BRiCG, y_col_emb_BNE = preprocess_fn(
             rows_RiBC, y, num_train, scaler_cache
-        )
+        ) # rows_RiBC是测试集，对测试集填充训练集的缺失值、标准化、新增特征
         num_rows, C = x_grouped_BRiCG.shape[1], x_grouped_BRiCG.shape[2]
 
         # --- Phase 1: compute inducing hidden when chunking w/o a pre-built cache. ---
@@ -2165,7 +2165,7 @@ class TabPFNV3(Architecture):
         B, _, Cj, _ = x_grouped_chunk_BNCjG.shape
 
         # Embed this column chunk → (B, Rt, Cj, E)
-        x_emb_BNCjE = self.x_embed(x_grouped_chunk_BNCjG)
+        x_emb_BNCjE = self.x_embed(x_grouped_chunk_BNCjG) # self.x_embed = nn.Linear(in_features, config.embed_dim, **kw)
         E = x_emb_BNCjE.shape[-1]
 
         # Target-aware y (broadcasts over the Cj columns)
