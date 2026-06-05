@@ -455,7 +455,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
 
         X_full, y_train = _prepare_model_inputs(
             device, self.force_inference_dtype, X_train, X_test, y_train
-        )
+        ) # 转为tensor
 
         performance_options = model.get_default_performance_options()
         performance_options = dataclasses.replace(
@@ -764,7 +764,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
 
         X_full, y_train = _prepare_model_inputs(
             device, self.force_inference_dtype, X_train, X_test, y_train
-        )
+        ) # tensor处理，所有数据移到 GPU，cast 到指定 dtype
 
         performance_options = model.get_default_performance_options()
         performance_options = dataclasses.replace(
@@ -779,7 +779,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             gpu_preprocessor=gpu_preprocessor,
             num_train_rows=X_train.shape[0],
             feature_schema=feature_schema,
-        )
+        ) # 部分预处理步骤在 GPU 上执行（如 SVD 降维、分位数变换的某些操作），在数据移到 GPU 后立即运行
         batched_cat_ix = [feature_schema.indices_for(FeatureModality.CATEGORICAL)]
 
         kwargs = {}
@@ -797,7 +797,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 categorical_inds=batched_cat_ix,
                 performance_options=performance_options,
                 **kwargs,
-            )
+            ) # 调用 tabpfn_v3.py TabPFNV3.forward()
 
     @override
     def use_torch_inference_mode(self, *, use_inference: bool) -> None:
