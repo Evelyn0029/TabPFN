@@ -238,7 +238,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         inference_config: dict | InferenceConfig | None = None,
         differentiable_input: bool = False,
         eval_metric: str | ClassifierEvalMetrics | None = None,
-        tuning_config: dict | ClassifierTuningConfig | None = None,
+        tuning_config: dict | ClassifierTuningConfig | None = None, # 默认不校准概率 不调整类别判断的阈值
         show_progress_bar: bool = False,
     ) -> None:
         """Construct a TabPFN classifier.
@@ -697,24 +697,24 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X,
             y,
             estimator=self,
-            max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
-            max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
+            max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES, # 限制了输入x_train的最大样本数
+            max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES, # 限制了输入x_train的最大特征数
             ignore_pretraining_limits=self.ignore_pretraining_limits,
             ensure_y_numeric=False,
             devices=self.devices_,
-        )
+        ) # 该函数检查 样本量、特征量的上限
 
         feature_schema = detect_feature_modalities(
             X=X,
             feature_names=feature_names,
             provided_categorical_indices=self.categorical_features_indices,
-            min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
-            max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
-            min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
-        )
+            min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE, # 样本量大于等于100才推断类别特征
+            max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES, # 传自config, 唯一值小于等于30 认为是类别特征
+            min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES, # 传自config, 唯一值大于等于4 认为是数值特征
+        ) # 判断特征列类别
         X, ordinal_encoder, feature_schema = clean_data(
             X=X, feature_schema=feature_schema
-        )
+        ) # 缺失值用均值填充, 将类别型特征编码为 ordinal
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
         self.feature_names_in_ = feature_names
@@ -722,7 +722,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.n_train_samples_ = len(X)
 
         # Label encoding
-        self.label_encoder_ = TabPFNLabelEncoder(original_target_name=original_y_name)
+        self.label_encoder_ = TabPFNLabelEncoder(original_target_name=original_y_name) # 标签y编码
         y, label_metadata = self.label_encoder_.fit_transform(
             y=y, max_num_classes=self.inference_config_.MAX_NUMBER_OF_CLASSES
         )
@@ -741,10 +741,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         ensemble_configs = generate_classification_ensemble_configs(
             num_estimators=self.n_estimators_,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
-            feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
+            feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD, # 特征在表中的顺序不一致
             polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
-            preprocessor_configs=preprocessor_configs,
-            class_shift_method=self.inference_config_.CLASS_SHIFT_METHOD,
+            preprocessor_configs=preprocessor_configs, # 有不同的数值尺度处理、是否生成新特征：svd主成分
+            class_shift_method=self.inference_config_.CLASS_SHIFT_METHOD, # 类别编码不一致，避免 类别1 始终映射是0
             n_classes=self.n_classes_,
             random_state=random_state,
             num_models=len(self.models_),
@@ -796,7 +796,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self
         """
         # Validate eval_metric here instead of in __init__ as per sklearn convention
-        self.eval_metric_ = _validate_eval_metric(self.eval_metric)
+        self.eval_metric_ = _validate_eval_metric(self.eval_metric) # f1 roc_auc balanced_accuracy accuracy log_loss
 
         if self.fit_mode == "batched":
             logging.warning(
@@ -815,16 +815,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             raise ValueError("fit_with_cache is not supported for TabPFN v2.6 yet.")
 
         static_seed, _ = infer_random_state(self.random_state)
-        byte_size = self._initialize_model_variables()
+        byte_size = self._initialize_model_variables() #  加载模型与设备
         ensemble_configs, X, y = self._initialize_dataset_preprocessing(
             X=X, y=y, random_state=static_seed
-        )
+        ) #  数据与集成配置，对缺失值、编码进行了处理，同时集成了不同的数据预处理方法
         self.ensemble_configs_ = ensemble_configs
 
-        self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y)
+        self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y) # 根据 temperature 校准输出的概率，根据校准后概率找到最优划分阈值
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
-            configs=ensemble_configs,
+            configs=ensemble_configs, #  数据与集成配置，对缺失值、编码进行了处理，同时集成了不同的数据预处理方法
             n_samples=X.shape[0],
             feature_schema=self.inferred_feature_schema_,
             # Note: we use the static_seed so we're independent of the random generation
@@ -845,10 +845,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
 
         self.executor_ = create_inference_engine(
-            fit_mode=self.fit_mode,
+            fit_mode=self.fit_mode, # 默认fit_preprocessors，create_inference_engine返回的是 InferenceEngineCachePreprocessing
             X_train=X,
             y_train=y,
-            models=self.models_,
+            models=self.models_, # 
             ensemble_preprocessor=self.ensemble_preprocessor_,
             devices_=self.devices_,
             byte_size=byte_size,
@@ -1013,7 +1013,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             num_samples=X.shape[0],
         )
         if tuning_config_resolved is None:
-            if self.eval_metric_ is ClassifierEvalMetrics.F1:
+            if self.eval_metric_ is ClassifierEvalMetrics.F1: # 如果用户指定了 eval_metric='f1' 但没有配置 tuning_config，会警告建议调参
                 warnings.warn(
                     f"You specified '{self.eval_metric_}' as the eval metric but "
                     "haven't specified any tuning configuration. Consider configuring "
@@ -1034,7 +1034,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 )
             return
 
-        if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC:
+        if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC: # ROC AUC 是阈值无关的 metric（通过计算 AUC 来评价整体排序质量）调阈值或温度对 ROC AUC 没有帮助，所以这里发出警告，建议用户禁用这些调参选项
             warnings.warn(
                 f"You specified '{self.eval_metric_}' as the eval metric with "
                 "threshold tuning or temperature calibration enabled. "
@@ -1048,20 +1048,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X=X,
             y=y,
             holdout_frac=float(tuning_config_resolved.tuning_holdout_frac),
-            n_folds=int(tuning_config_resolved.tuning_n_folds),
-        )
+            n_folds=int(tuning_config_resolved.tuning_n_folds), # 默认情况下只有1折，即不交叉验证
+        ) # 计算留出验证数据的预测结果，返回的是logits，注意是多折的
 
         # WARNING: ensure the calibration happens before threshold tuning!
         if tuning_config_resolved.calibrate_temperature:
             calibrated_softmax_temperature = self._get_calibrated_softmax_temperature(
                 holdout_raw_logits=holdout_raw_logits,
                 holdout_y_true=holdout_y_true,
-            )
+            ) # 根据Logloss找到最优的 temperature 
             self.softmax_temperature_ = calibrated_softmax_temperature
 
         if tuning_config_resolved.tune_decision_thresholds:
             holdout_probas = (
-                self.logits_to_probabilities(holdout_raw_logits)
+                self.logits_to_probabilities(holdout_raw_logits) # 使用最优temperature 输出概率
                 .float()
                 .detach()
                 .cpu()
@@ -1072,7 +1072,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 y_true=holdout_y_true,
                 y_pred_probas=holdout_probas,
                 n_classes=self.n_classes_,
-            )
+            ) # 使用校准后的概率  尝试不同阈值划分的类别预测，利用metric筛选最优的阈值
             self.tuned_classification_thresholds_ = tuned_classification_thresholds
 
     def _compute_holdout_validation_data(
@@ -1097,14 +1097,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             holdout_frac=holdout_frac,
             random_state=self.random_state,
             n_splits=n_folds,
-        )
+        ) # 使用 StratifiedKFold（分层抽样）
 
         holdout_raw_logits = []
         holdout_y_true = []
         # suffixes: Nt=num_train_samples, F=num_features, Nh=num_holdout_samples
         for X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh in splits:
             holdout_y_true.append(y_holdout_Nh)
-            calibration_classifier = self._get_tuning_classifier()
+            calibration_classifier = self._get_tuning_classifier() # 创建新的分类器
             with warnings.catch_warnings():
                 # Filter expected warnings during tuning
                 warnings.filterwarnings(
@@ -1115,7 +1115,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 calibration_classifier.fit(X_train_NtF, y_train_Nt)
 
             # E=num estimators, Nh=num holdout samples, C=num classes
-            raw_logits_ENhC = calibration_classifier.predict_raw_logits(X=X_holdout_NhF)
+            raw_logits_ENhC = calibration_classifier.predict_raw_logits(X=X_holdout_NhF) # 返回logits
             holdout_raw_logits.append(raw_logits_ENhC)
 
         holdout_raw_logits_all = np.concatenate(holdout_raw_logits, axis=1)
@@ -1147,10 +1147,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             The raw torch.Tensor output, either logits or probabilities,
             depending on `return_logits` and `return_raw_logits`.
         """
-        check_is_fitted(self)
+        check_is_fitted(self) # 检查模型已 fit
 
         if not self.differentiable_input:
-            X = ensure_compatible_predict_input_sklearn(X, self)
+            X = ensure_compatible_predict_input_sklearn(X, self) # 确保输入是 numpy array，特征数匹配
             X = fix_dtypes(
                 X,
                 cat_indices=self.inferred_feature_schema_.indices_for(
@@ -1160,7 +1160,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X = process_text_na_dataframe(
                 X=X,
                 ord_encoder=getattr(self, "ordinal_encoder_", None),
-            )
+            ) # 对类别特征进行ordinal_encoder_；缺失值用 mean 填充
 
         with handle_oom_errors(
             self.devices_,
@@ -1171,7 +1171,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         ):
             return self.forward(
                 X,
-                use_inference_mode=True,
+                use_inference_mode=True, # true时使用标准推理
                 return_logits=return_logits,
                 return_raw_logits=return_raw_logits,
             )
@@ -1263,7 +1263,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         probas = (
             self._raw_predict(X, return_logits=False).float().detach().cpu().numpy()
         )
-        probas = self._maybe_reweight_probas(probas=probas)
+        probas = self._maybe_reweight_probas(probas=probas) # 如果 fit 阶段做了阈值调优，按 tuned_classification_thresholds_ 重新加权概率
         if self.inference_config_.USE_SKLEARN_16_DECIMAL_PRECISION:
             probas = np.around(probas, decimals=SKLEARN_16_DECIMAL_PRECISION)
             probas = np.where(probas < PROBABILITY_EPSILON_ROUND_ZERO, 0.0, probas)
@@ -1294,14 +1294,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 .detach()
                 .cpu()
                 .numpy()
-            )
+            ) # 返回的是temperature调整后的概率
 
         return find_optimal_temperature(
             raw_logits=holdout_raw_logits,
             y_true=holdout_y_true,
             logits_to_probabilities_fn=logits_to_probabilities_fn,
             current_default_temperature=self.softmax_temperature_,
-        )
+        ) # 找到最优的概率，最优标准是log_loss
 
     def _maybe_reweight_probas(self, probas: np.ndarray) -> np.ndarray:
         """Reweights the probabilities if a target_metric is specified.
@@ -1412,7 +1412,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             )
 
         if use_balance:
-            steps.append(self._apply_balancing)
+            steps.append(self._apply_balancing) # 用于修正多数类 少数类的概率
 
         output = raw_logits
         for fn in steps:
@@ -1493,15 +1493,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # Don't enable inference mode when differentiable_input=True (prompt tuning)
             # to allow gradients to flow through
             actual_inference_mode = use_inference_mode and not self.differentiable_input
-            self.executor_.use_torch_inference_mode(use_inference=actual_inference_mode)
+            self.executor_.use_torch_inference_mode(use_inference=actual_inference_mode) # 推理模式设置
 
-        outputs = []
+        outputs = [] # 遍历所有 Estimator
         for output, config in tqdm(
             self.executor_.iter_outputs(
                 X,
                 autocast=self.use_autocast_,
                 task_type="multiclass",
-            ),
+            ), # 返回的是InferenceEngineCachePreprocessing，获取每个 ensemble member 的模型输出，这里真正调用 TabPFNv3.forward进行embedidding+attention+预测。这里会调用nference.py的_call_model()
             total=self.n_estimators_,
             desc="TabPFN inference",
             unit="estimator",
@@ -1525,7 +1525,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
             # Process the config_list (which is now guaranteed to be a list)
             output_batch = []
-            for i, batch_config in enumerate(config_list):
+            for i, batch_config in enumerate(config_list): # 这一步是为了处理之前的 类别标签 shuufle 还原
                 assert isinstance(batch_config, ClassifierEnsembleConfig)
                 # If class_permutation is None - class shifting is disabled
                 # So we slice to self.n_classes_ to ensure the output tensor matches
@@ -1549,11 +1549,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # --- Post-processing ---
         stacked_outputs = torch.stack(outputs)
 
-        if return_logits:
+        if return_logits: # 默认false，调用false
             temp_scaled = self._apply_temperature(stacked_outputs)
             output = self._average_across_estimators(temp_scaled)
-        elif return_raw_logits:
-            output = stacked_outputs
+        elif return_raw_logits: # 默认false，调用false
+            output = stacked_outputs # 返回原始logits
         else:
             output = self.logits_to_probabilities(stacked_outputs)
 
