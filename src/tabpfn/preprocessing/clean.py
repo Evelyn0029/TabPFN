@@ -163,7 +163,7 @@ def process_text_na_dataframe(
     # with placeholder NAN value. Later placeholder NAN values are transformed to np.nan
     string_cols = X.select_dtypes(include=["string", "object"]).columns
     if len(string_cols) > 0:
-        X[string_cols] = X[string_cols].fillna(placeholder)
+        X[string_cols] = X[string_cols].fillna(placeholder) # 用占位符 "__MISSING__" 替换字符串列中的 NaN，让 OrdinalEncoder 能够编码这些缺失值
 
     if fit_encoder and ord_encoder is not None:
         X_encoded = ord_encoder.fit_transform(X)
@@ -178,5 +178,5 @@ def process_text_na_dataframe(
         placeholder_mask,
         np.nan,
         X_encoded[:, string_cols_ix],
-    )
+    ) # 恢复缺失值
     return typing.cast("np.ndarray", X_encoded.astype(np.float64))
