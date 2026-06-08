@@ -409,7 +409,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
             The fitted instance itself.
         """
         if self.eval_metric is None:
-            self.eval_metric = "roc_auc"
+            self.eval_metric = "roc_auc" # 默认metric使用 auc
 
         super().fit(X, y, X_val=X_val, y_val=y_val, output_dir=output_dir)
         return self
