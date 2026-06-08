@@ -556,7 +556,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             local_rank,
             device_str,
             is_main_process,
-        ) = _maybe_setup_ddp(self.device)
+        ) = _maybe_setup_ddp(self.device) # 
 
         if using_ddp:
             self.device = device_str
@@ -578,8 +578,8 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 _logger = NullLogger()
 
         # Store the original training size for checkpoint naming
-        train_size = X.shape[0]
-        start_time = time.monotonic()
+        train_size = X.shape[0] # 传参X是训练集x_train
+        start_time = time.monotonic() 
 
         _estimator_kwargs = copy.deepcopy(self._estimator_kwargs)
         model_path = _estimator_kwargs.pop("model_path", None)
@@ -622,7 +622,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         epoch_to_start_from = 0
         checkpoint_path = None
-        if output_dir is not None:
+        if output_dir is not None: # 这部分是检查是否有未训完的checkpoint   继续训练
             checkpoint_path, epoch_to_start_from = (
                 get_checkpoint_path_and_epoch_from_output_dir(
                     output_dir=output_dir,
@@ -637,8 +637,8 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 )
                 finetuning_estimator_config["model_path"] = checkpoint_path
 
-        self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
-        self._setup_estimator()
+        self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config) # 实际调用的是父类的该函数，默认是 v2.5版本
+        self._setup_estimator() # 实际调用的是父类的该函数， 用于更新softmax_temperature_参数
 
         X_validated, y_validated, self.feature_names_in_, self.n_features_in_ = (
             ensure_compatible_fit_inputs_sklearn(
@@ -647,7 +647,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 estimator=self.finetuned_estimator_,
                 ensure_y_numeric=self._model_type == "regressor",
             )
-        )
+        ) # X/y 转 ndarray、检查格式，得到 X_validated, y_validated 及特征名、列数。
         self.X_ = X
         self.y_ = y
         X, y = X_validated, y_validated
@@ -659,23 +659,23 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 y_val,
                 estimator=self.finetuned_estimator_,
                 ensure_y_numeric=self._model_type == "regressor",
-            )
+            ) # 若用户给了 X_val, y_val：训练集 = 全部 X,y；验证集单独校验。
         else:
-            X_train, X_val, y_train, y_val = self._get_train_val_split(X, y)
+            X_train, X_val, y_train, y_val = self._get_train_val_split(X, y) # 否则 _get_train_val_split：默认 10% 做 val（分类分层，val 最多 5 万行）。
 
         # Calculate the context size used during finetuning.
         n_finetune_ctx_plus_query_samples = min(
             self.n_finetune_ctx_plus_query_samples,
             len(y_train),
-        )
+        ) # context+query 合计上限），最高1w
 
-        self.finetuned_estimator_._initialize_model_variables()
-        self.finetuned_estimator_.model_.to(self.device)
+        self.finetuned_estimator_._initialize_model_variables() # 下载/加载 checkpoint、models_、inference_config_、设备等。
+        self.finetuned_estimator_.model_.to(self.device) # Transformer 权重放到训练 GPU。
 
         finetuning_performance_options = PerformanceOptions(
             force_recompute_layer=self.use_activation_checkpointing,
             use_chunkwise_inference=False,
-        )
+        ) # force_recompute_layer=True 时 activation checkpoint 省显存；微调关闭 chunkwise inference。
 
         # --- DDP model wrapping ---
         model_for_optimization = self.finetuned_estimator_.model_
@@ -688,7 +688,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 output_device=local_rank,
                 broadcast_buffers=False,
                 find_unused_parameters=False,
-            )
+            ) # 并行操作
             model_for_optimization = self._ddp_module_
 
         optimizer = get_and_init_optimizer(
@@ -697,7 +697,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             weight_decay=self.weight_decay,
             checkpoint_path=checkpoint_path,
             device=self.device,
-        )
+        ) # 优化器AdamW；若从 checkpoint 恢复则一并加载 optimizer state。
 
         use_amp = self.device.startswith("cuda") and torch.cuda.is_available()
         scaler = GradScaler() if use_amp else None  # type: ignore
@@ -753,32 +753,34 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 n_finetune_ctx_plus_query_samples * self.finetune_ctx_query_split_ratio
             ),
             y_train=y_train,
-        )
-        for epoch in range(epoch_to_start_from, self.epochs):
+        ) # 每个 chunk 里 query 行数 ≈ 1w × 20%；分类还会 ≥ 类别数。
+        for epoch in range(epoch_to_start_from, self.epochs): # epoch循环
             # Per-epoch aggregates for cleaner learning curves.
             epoch_loss_sum = 0.0
             epoch_batches = 0
 
-            epoch_random_state = static_seed + epoch
+            epoch_random_state = static_seed + epoch # 每 epoch 不同 shuffle/split。
 
             # Regenerate datasets each epoch with a different random_state
             training_splitter = partial(
                 train_test_split,
                 test_size=finetuning_query_size,
                 random_state=epoch_random_state,
-            )
+            ) # 每次epoch的训练测试划分随机
 
             training_datasets = get_preprocessed_dataset_chunks(
                 calling_instance=self.finetuned_estimator_,
                 X_raw=X_train,
                 y_raw=y_train,
                 split_fn=training_splitter,
-                max_data_size=n_finetune_ctx_plus_query_samples,
+                max_data_size=n_finetune_ctx_plus_query_samples, # 1w
                 model_type=self._model_type,
                 equal_split_size=False,
                 data_shuffle_seed=epoch_random_state,
                 preprocessing_random_state=preprocessing_random_state,
-            )
+            ) # 把整个x_train切分成chunk，每个chunk的上限大小是 n_finetune_ctx_plus_query_samples ，内部使用StratifiedKFold进行划分，一共划分为x_train总数/n_finetune_ctx_plus_query_samples 个。
+            # 每个chunk进行数据预处理：缺失值填充、类别特征编码、集成配置
+            # 在每个chunk上，使用training_splitter切成context/query。最后转tensor
 
             if using_ddp:
                 sampler = DistributedSampler(
@@ -794,12 +796,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     batch_size=self.meta_batch_size,
                     collate_fn=meta_dataset_collator,
                     sampler=sampler,
-                )
+                ) # 每个chunk转换tensor
             else:
                 dataloader_generator = torch.Generator().manual_seed(epoch_random_state)
                 finetuning_dataloader = DataLoader(
                     training_datasets,
-                    batch_size=self.meta_batch_size,
+                    batch_size=self.meta_batch_size, # meta 数据集维度，= 1 个 chunk。
                     collate_fn=meta_dataset_collator,
                     shuffle=True,
                     generator=dataloader_generator,
@@ -860,7 +862,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     batch.cat_indices,
                     batch.configs,
                     performance_options=finetuning_performance_options,
-                )
+                ) # 缓存context
 
                 if using_ddp:
                     _move_tabpfn_cached_contexts_to_device(
@@ -870,7 +872,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 use_scaler = use_amp and scaler is not None
 
                 with autocast(enabled=use_scaler), sdpa_kernel_context():  # type: ignore
-                    loss = self._forward_with_loss(batch)
+                    loss = self._forward_with_loss(batch) # 用 X_query 做前向，y_query 算 loss
 
                 if use_scaler:
                     with sdpa_kernel_context():
@@ -887,7 +889,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     scaler.update()  # type: ignore
                 else:
                     with sdpa_kernel_context():
-                        loss.backward()
+                        loss.backward() # 更新模型参数
 
                     if self.grad_clip_value is not None:
                         clip_grad_norm_(
@@ -895,7 +897,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                             self.grad_clip_value,
                         )
 
-                    optimizer.step()
+                    optimizer.step() # 更新模型参数
 
                 if scheduler is not None:
                     scheduler.step()
